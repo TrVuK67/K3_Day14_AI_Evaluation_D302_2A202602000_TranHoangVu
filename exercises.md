@@ -30,11 +30,11 @@ critical.
 
 | Metric | Acceptable Low Score Scenario | Critical Low Score Scenario | Action Required |
 |---|---|---|---|
-| Faithfulness | | | |
-| Answer Relevance | | | |
-| Context Recall | | | |
-| Context Precision | | | |
-| Completeness | | | |
+| Faithfulness | Câu trả lời bổ sung thông tin lời chào/định dạng xã giao hoặc chủ động từ chối trả lời do Context không có dữ liệu. | Model bị hallucination, tự bịa đặt thông tin sai lệch so với Context (học phí, quy chế, lịch thi). | Thắt chặt System Prompt (chỉ dùng Context), hạ Temperature về 0.0, kiểm tra ranh giới Retriever/Generator. |
+| Answer Relevance | Câu hỏi mơ hồ hoặc câu xã giao ("Chào bạn") làm bot đưa ra phản hồi tổng quát/xác nhận lại ý định. | Câu trả lời hoàn toàn lạc đề, trả lời sang một chủ đề khác không liên quan đến thắc mắc của sinh viên. | Tinh chỉnh Prompt generation đi thẳng vào trọng tâm, cải thiện Query Rewriting/Expansion để bắt đúng Intent. |
+| Context Recall | Expected Answer chứa thông tin lề không quan trọng hoặc câu hỏi đơn giản không cần tới toàn bộ tài liệu dài. | Retriever bỏ sót các thông tin/bằng chứng cốt lõi (ground truth evidence) cần thiết để trả lời câu hỏi. | Tăng `top_k`, áp dụng Hybrid Search (BM25 + Dense Embeddings), tối ưu Chunking strategy hoặc cập nhật dữ liệu nguồn. |
+| Context Precision | Thu thập ra nhiều Chunks bổ trợ tốt nhưng Chunk chính đứng ở vị trí 2-3 thay vì vị trí 1 (LLM vẫn lọc được). | Relevant Chunks nằm ở vị trí quá thấp hoặc top Chunks retrieved toàn là nhiễu, gây lỗi "Lost in the Middle". | Tích hợp Reranker (Cross-Encoder / Cohere Rerank), fine-tune Embedding model, lọc bớt noise chunks trước Generator. |
+| Completeness | Sinh viên chỉ cần câu trả lời tóm tắt ngắn gọn thay vì liệt kê toàn bộ các điều khoản tiểu tiết trong Expected Answer. | Câu trả lời bỏ sót các bước xử lý hoặc điều kiện bắt buộc (ví dụ: thiếu hạn nộp đơn hoãn thi khiến sinh viên trượt môn). | Tinh chỉnh Prompt generation yêu cầu trả lời đầy đủ các ý cốt lõi, áp dụng Structured Output / Multi-step extraction. |
 
 ### Exercise 1.2 — Bias trong LLM-as-a-Judge
 
@@ -47,14 +47,24 @@ Ba bias thường gặp:
 **Câu 1: Thiết kế experiment phát hiện position bias với ít nhất hai conditions.**
 
 > *Câu trả lời:*
+> - **Condition A (Direct Order)**: Đưa hai câu trả lời A và B cho LLM Judge dưới dạng Pairwise Evaluation theo thứ tự `[Answer A, Answer B]` và yêu cầu chọn câu trả lời tốt hơn hoặc chấm điểm từng câu.
+> - **Condition B (Swapped Order)**: Đảo vị trí của hai câu trả lời thành `[Answer B, Answer A]`, giữ nguyên Question, Context và System Prompt.
+> - **Đánh giá & Metrics**: So sánh tỷ lệ thắng (Win Rate) hoặc điểm trung bình của Answer A ở Condition A vs Condition B. Nếu câu trả lời xuất hiện ở vị trí đầu tiên (Position 1) liên tục nhận điểm cao hơn hoặc thắng nhiều hơn đáng kể bất kể nội dung (p < 0.05), hệ thống có hiện tượng **Position Bias**.
+> - **Giải pháp**: Chấm điểm theo cả 2 chiều (Swap Order) rồi lấy điểm trung bình, hoặc chuyển sang Single-Answer Evaluation dựa trên Rubric thay vì Pairwise Comparison.
 
 **Câu 2: Làm thế nào giảm verbosity bias bằng rubric design?**
 
 > *Câu trả lời:*
+> 1. **Bổ sung quy tắc Conciseness & Mật độ thông tin**: Thêm chỉ dẫn trực tiếp vào Prompt của LLM Judge: *"Không cộng điểm cho các câu trả lời dài dòng, hoa mỹ hoặc lặp lại thông tin không cần thiết. Đánh giá dựa trên lượng thông tin đúng và hữu ích."*
+> 2. **Chấm điểm theo các Key Information Points (KIPs)**: Định nghĩa tiêu chuẩn chấm 5/5 dựa trên việc trả lời đúng và đủ các ý chính cốt lõi (Key Points), không phụ thuộc vào độ dài câu từ.
+> 3. **Phân tách chiều đánh giá (Multi-dimensional Scoring)**: Tách riêng chiều *Correctness/Factuality* và chiều *Conciseness*. Nếu phản hồi quá dài dòng hoặc thừa thông tin, chiều *Conciseness* sẽ bị trừ điểm, giúp ngăn chặn việc "câu dài làm lu mờ lỗi sai factual".
 
 **Câu 3: Tại sao cần calibrate LLM judge với human labels?**
 
 > *Câu trả lời:*
+> - **Đo lường khoảng cách Alignment (Human Alignment Gap)**: LLM Judge luôn có nguy cơ mắc các dạng bias (position, verbosity, self-preference) và nhạy cảm với prompt. Calibration giúp tính toán chỉ số tương quan (như Cohen's Kappa, Spearman Correlation) giữa điểm của LLM Judge và đánh giá của chuyên gia (Human Annotators).
+> - **Phát hiện lỗi hệ thống (Systematic Errors)**: Nhận diện xem LLM Judge có xu hướng quá dễ dãi (lenient) hay quá khắt khe (strict) ở từng tiêu chí cụ thể nào để điều chỉnh prompt/rubric.
+> - **Đảm bảo tính tin cậy trước khi tự động hóa**: Giúp tinh chỉnh Prompt, Rubric và Few-shot Examples cho LLM Judge cho đến khi đạt độ đồng thuận cao (> 0.8) với Human Baseline trước khi tin tưởng sử dụng trong CI/CD pipeline tự động.
 
 ### Exercise 1.3 — Evaluation trong CI/CD
 
@@ -62,13 +72,22 @@ Ba bias thường gặp:
 
 | Metric | Threshold | Lý do |
 |---|---:|---|
-| Faithfulness | | |
-| Answer Relevance | | |
-| Completeness | | |
+| Faithfulness | 0.85 | Hệ thống Student Services tư vấn quy chế, học phí, lịch thi yêu cầu độ chính xác tuyệt đối dựa trên tài liệu. Score < 0.85 có rủi ro cao gây hallucination, dẫn tới hậu quả sai lệch thông tin nghiêm trọng cho sinh viên. |
+| Answer Relevance | 0.80 | Đảm bảo phản hồi giải quyết đúng và trúng thắc mắc của sinh viên. Score < 0.80 thể hiện câu trả lời lan man, trả lời không đúng ý câu hỏi, gây trải nghiệm người dùng kém. |
+| Completeness | 0.75 | Đảm bảo cung cấp đủ các bước/điều kiện quan trọng. Chọn threshold 0.75 vì một số câu hỏi chỉ cần câu trả lời ngắn gọn/tóm tắt là đạt yêu cầu thực tế mà không nhất thiết phải liệt kê 100% tiểu tiết. |
 
 **Câu 2: Khi nào dùng offline evaluation, online evaluation và human review?**
 
 > *Câu trả lời:*
+> - **Offline Evaluation (Pre-deployment / CI/CD Pipeline)**:
+>   - *Thời điểm*: Thực hiện tự động trong pipeline CI/CD mỗi khi có Pull Request, thay đổi prompt, đổi embedding model hoặc tinh chỉnh RAG workflow.
+>   - *Mục đích*: Chạy trên Golden Dataset cố định (20–100 QA pairs) để phát hiện sớm các lỗi suy giảm chất lượng (Regression Errors) trước khi merge code hoặc deploy lên production.
+> - **Online Evaluation (Post-deployment / Production Monitoring)**:
+>   - *Thời điểm*: Thực hiện liên tục 24/7 trên luồng hội thoại thực tế của người dùng tại môi trường Production.
+>   - *Mục đích*: Theo dõi hiệu năng thực tế qua các tín hiệu từ người dùng (Thumbs Up/Down, CSAT), tín hiệu ngầm (tỷ lệ hỏi lại, drop-off rate, latency, cost per query) và thu thập telemetry để phát hiện các edge cases mới mà Golden Dataset chưa bao phủ.
+> - **Human Review (Manual Audit / Expert Evaluation)**:
+>   - *Thời điểm*: Thực hiện định kỳ theo chu kỳ (ví dụ audit 5–10% logs hàng tuần), hoặc kích hoạt khẩn cấp khi phát hiện Anomaly (online metrics sụt giảm đột ngột), hoặc khi xây dựng/cập nhật Golden Dataset.
+>   - *Mục đích*: Cung cấp Ground Truth chuẩn xác nhất, dùng để Calibrate lại LLM-as-a-Judge, và đánh giá các yếu tố tinh tế như tone giọng (tone of voice), tính an toàn (safety) và quy trình nghiệp vụ thực tế của nhà trường.
 
 ---
 
