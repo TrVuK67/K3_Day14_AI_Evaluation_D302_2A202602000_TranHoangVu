@@ -370,8 +370,8 @@ def rerank_by_overlap(contexts: list[str], query: str) -> list[str]:
     Hint: sorted(contexts, key=lambda c: len(_tokenize(c) & _tokenize(query)),
                  reverse=True)
     """
-    # TODO (Bonus — Exercise 3.5): implement the reranker
-    raise NotImplementedError("Implement rerank_by_overlap")
+    query_tokens = _tokenize(query)
+    return sorted(contexts, key=lambda c: len(_tokenize(c) & query_tokens), reverse=True)
 
 
 # ---------------------------------------------------------------------------
@@ -728,8 +728,11 @@ class FailureAnalyzer:
             dict mapping failure_type → count.
             Example: {"hallucination": 3, "irrelevant": 2, "incomplete": 5}
         """
-        # TODO
-        raise NotImplementedError("Implement categorize_failures")
+        counts: dict[str, int] = {}
+        for f in failures:
+            ftype = f.failure_type or "unknown"
+            counts[ftype] = counts.get(ftype, 0) + 1
+        return counts
 
     def find_root_cause(self, failure: EvalResult) -> str:
         """
@@ -741,10 +744,24 @@ class FailureAnalyzer:
             "Answer is missing key information — increase context window or improve generation"
             "Multiple issues detected — review full pipeline"
         """
-        # TODO: compare faithfulness, relevance, completeness, return appropriate string
-        raise NotImplementedError("Implement find_root_cause")
+        f_score = failure.faithfulness
+        r_score = failure.relevance
+        c_score = failure.completeness
 
-    def generate_improvement_log(self, failures: list, suggestions: list[str]) -> str:
+        min_score = min(f_score, r_score, c_score)
+        lowest_count = sum(1 for s in (f_score, r_score, c_score) if s == min_score)
+
+        if lowest_count > 1:
+            return "Multiple issues detected — review full pipeline"
+
+        if min_score == f_score:
+            return "Context is missing or irrelevant — improve retrieval"
+        elif min_score == r_score:
+            return "Answer does not address the question — improve prompt clarity"
+        else:
+            return "Answer is missing key information — increase context window or improve generation"
+
+    def generate_improvement_log(self, failures: list[EvalResult], suggestions: list[str]) -> str:
         """Generate a Markdown table logging failures and improvement actions.
 
         Format:
@@ -758,10 +775,18 @@ class FailureAnalyzer:
 
         Returns:
             Markdown table string with a row per failure. Status is always "Open".
-
-        TODO: Build markdown table with failure details + matched suggestions
         """
-        raise NotImplementedError
+        lines = [
+            "| Failure ID | Type | Root Cause | Suggested Fix | Status |",
+            "|------------|------|------------|---------------|--------|",
+        ]
+        for i, f in enumerate(failures):
+            fid = f"F{i+1:03d}"
+            ftype = f.failure_type or "Unknown"
+            cause = self.find_root_cause(f)
+            fix = suggestions[i] if i < len(suggestions) else (suggestions[0] if suggestions else "Review pipeline")
+            lines.append(f"| {fid} | {ftype} | {cause} | {fix} | Open |")
+        return "\n".join(lines)
 
     def generate_improvement_suggestions(
         self, failures: list[EvalResult]
@@ -779,8 +804,32 @@ class FailureAnalyzer:
         Returns:
             List of at least 3 suggestion strings (or fewer if failures is empty).
         """
-        # TODO: analyze categorized failures and return suggestions
-        raise NotImplementedError("Implement generate_improvement_suggestions")
+        if not failures:
+            return []
+
+        counts = self.categorize_failures(failures)
+        suggestions: list[str] = []
+
+        if counts.get("hallucination", 0) > 0 or any(f.faithfulness < 0.5 for f in failures):
+            suggestions.append("Implement hallucination checker to filter unsupported claims")
+        if counts.get("incomplete", 0) > 0 or any(f.completeness < 0.5 for f in failures):
+            suggestions.append("Add few-shot examples showing complete answers to improve completeness")
+        if counts.get("irrelevant", 0) > 0 or any(f.relevance < 0.5 for f in failures):
+            suggestions.append("Improve prompt instructions to directly target the user question")
+
+        default_suggestions = [
+            "Increase chunk size in RAG pipeline to reduce context fragmentation",
+            "Implement reranking (e.g. Cross-Encoder) to place relevant chunks at top ranks",
+            "Fine-tune system prompt to strictly follow retrieved context",
+        ]
+
+        for s in default_suggestions:
+            if len(suggestions) >= 3:
+                break
+            if s not in suggestions:
+                suggestions.append(s)
+
+        return suggestions
 
 
 # ---------------------------------------------------------------------------
